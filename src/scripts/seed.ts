@@ -1,156 +1,169 @@
-import mongoose from "mongoose";
-import Product from "../models/product.js";
-import { MONGODB_URI } from "../lib/constants.js";
+/**
+ * Seeds the catalogue that the mobile app was prototyped with (src/data in the
+ * Expo project) so the two projects line up out of the box. Idempotent: rows are
+ * upserted by slug / id, so it's safe to re-run.
+ *
+ *   pnpm db:seed
+ */
+import { eq, sql } from "drizzle-orm";
+import { logger } from "../config/logger.js";
+import { closeDatabase, db } from "../db/index.js";
+import { banners, brands, categories, doctors, lensAddons, products, productVariants, promoCodes } from "../db/schema/index.js";
 
-const connectDB = async () => {
-  try {
-    await mongoose.connect(MONGODB_URI);
-    console.log("MongoDB Connected");
-  } catch (err) {
-    console.error("Database connection error:", err);
-    process.exit(1);
-  }
+const swatches = {
+  black: "#22262B",
+  brown: "#8A5A3B",
+  navy: "#16294F",
+  gold: "#C0A062",
+  tortoise: "#6B4A2B",
+  silver: "#B8BCC4",
+  clear: "#D9E4F0",
+} as const;
+
+const colorNames: Record<string, { ar: string; en: string }> = {
+  [swatches.black]: { ar: "أسود", en: "Black" },
+  [swatches.brown]: { ar: "بني", en: "Brown" },
+  [swatches.navy]: { ar: "كحلي", en: "Navy" },
+  [swatches.gold]: { ar: "ذهبي", en: "Gold" },
+  [swatches.tortoise]: { ar: "سلحفاة", en: "Tortoise" },
+  [swatches.silver]: { ar: "فضي", en: "Silver" },
+  [swatches.clear]: { ar: "شفاف", en: "Clear" },
 };
 
-const quickProducts = [
-  {
-    name: "Nike Dri-FIT Training T-Shirt",
-    brand: "Nike",
-    description:
-      "Lightweight and breathable training shirt designed to keep you cool.",
-    aboutItem: [
-      "Made from 100% recycled polyester fibers",
-      "Sweat-wicking Dri-FIT technology",
-      "Slim athletic fit",
-      "Machine washable",
-    ],
-    price: 45.99,
-    category: "68ee94087ed84fa385b6c9db", // Men's Sportswear
-    stock: 120,
-    deliveryDate: new Date("2025-10-20"),
-    discount: 10,
-    saleRate: 2400,
-    images: [
-      "/images/products/nike_dri_fit_tee_1.jpg",
-      "/images/products/nike_dri_fit_tee_2.jpg",
-    ],
-    banner: "/images/banners/nike_dri_fit_banner.jpg",
-    isActive: true,
-  },
-  {
-    name: "Adidas Ultraboost 23 Running Shoes",
-    brand: "Adidas",
-    description:
-      "Premium running shoes with responsive cushioning for long-distance comfort.",
-    aboutItem: [
-      "Boost midsole for maximum energy return",
-      "Primeknit upper for adaptive fit",
-      "Durable Continental™ rubber outsole",
-      "Ideal for road running",
-    ],
-    price: 189.99,
-    category: "68ee94097ed84fa385b6c9df", // Running Shoes
-    stock: 75,
-    deliveryDate: new Date("2025-10-22"),
-    discount: 15,
-    saleRate: 4100,
-    images: [
-      "/images/products/adidas_ultraboost_1.jpg",
-      "/images/products/adidas_ultraboost_2.jpg",
-    ],
-    banner: "/images/banners/adidas_ultraboost_banner.jpg",
-    isActive: true,
-  },
-  {
-    name: "Puma Women's Yoga Leggings",
-    brand: "Puma",
-    description:
-      "High-waist leggings designed for flexibility and comfort during yoga sessions.",
-    aboutItem: [
-      "Moisture-wicking fabric",
-      "Four-way stretch material",
-      "Flatlock seams to reduce chafing",
-      "Hidden pocket for essentials",
-    ],
-    price: 59.99,
-    category: "68ee94087ed84fa385b6c9dd", // Women's Sportswear
-    stock: 95,
-    deliveryDate: new Date("2025-10-21"),
-    discount: 20,
-    saleRate: 1800,
-    images: [
-      "/images/products/puma_yoga_leggings_1.jpg",
-      "/images/products/puma_yoga_leggings_2.jpg",
-    ],
-    banner: "/images/banners/puma_yoga_banner.jpg",
-    isActive: true,
-  },
-  {
-    name: "Reebok Adjustable Dumbbell Set",
-    brand: "Reebok",
-    description:
-      "Space-saving adjustable dumbbell set ideal for strength training at home.",
-    aboutItem: [
-      "Adjustable from 5–25 kg",
-      "Durable metal build with grip handle",
-      "Includes base rack",
-      "Compact and portable",
-    ],
-    price: 229.99,
-    category: "68ee94097ed84fa385b6c9e3", // Sports Equipment
-    stock: 40,
-    deliveryDate: new Date("2025-10-24"),
-    discount: 12,
-    saleRate: 1350,
-    images: [
-      "/images/products/reebok_dumbbell_1.jpg",
-      "/images/products/reebok_dumbbell_2.jpg",
-    ],
-    banner: "/images/banners/reebok_dumbbell_banner.jpg",
-    isActive: true,
-  },
-  {
-    name: "Under Armour Gym Bag",
-    brand: "Under Armour",
-    description: "Durable and spacious gym bag with multiple compartments.",
-    aboutItem: [
-      "Water-resistant bottom panel",
-      "Adjustable shoulder strap",
-      "Ventilated pocket for shoes",
-      "Capacity: 40L",
-    ],
-    price: 69.99,
-    category: "68ee94097ed84fa385b6c9e1", // Fitness Accessories
-    stock: 150,
-    deliveryDate: new Date("2025-10-19"),
-    discount: 5,
-    saleRate: 950,
-    images: [
-      "/images/products/ua_gym_bag_1.jpg",
-      "/images/products/ua_gym_bag_2.jpg",
-    ],
-    banner: "/images/banners/ua_gym_bag_banner.jpg",
-    isActive: true,
-  },
+const categorySeed = [
+  { slug: "prescription", nameAr: "نظارات طبية", nameEn: "Prescription", sortOrder: 1 },
+  { slug: "sun", nameAr: "نظارات شمسية", nameEn: "Sunglasses", sortOrder: 2 },
+  { slug: "contact", nameAr: "عدسات لاصقة", nameEn: "Contact lenses", sortOrder: 3 },
+  { slug: "kids", nameAr: "أطفال", nameEn: "Kids", sortOrder: 4 },
+  { slug: "accessories", nameAr: "إكسسوارات", nameEn: "Accessories", sortOrder: 5 },
 ];
 
-const seedDatabase = async () => {
-  try {
-    await connectDB();
+const brandSeed = [{ slug: "vision-classic", nameAr: "ڤيجن كلاسيك", nameEn: "Vision Classic" }];
 
-    // Insert new products
-    console.log("Inserting sample products...");
-    const products = await Product.insertMany(quickProducts);
+const addonSeed = [
+  { id: "blueLight", nameAr: "حماية من الضوء الأزرق", nameEn: "Blue-light filter", price: 15_000, sortOrder: 1 },
+  { id: "antiGlare", nameAr: "مضاد للانعكاس", nameEn: "Anti-glare coating", price: 10_000, sortOrder: 2 },
+  { id: "thin", nameAr: "عدسات رقيقة", nameEn: "Thin lenses", price: 25_000, sortOrder: 3 },
+];
 
-    console.log(`✅ Successfully added ${products.length} products:`);
-    products.forEach((p) => console.log(`   - ${p.name} ($${p.price})`));
-  } catch (error) {
-    console.error("❌ Error seeding database:", error);
-  } finally {
-    await mongoose.connection.close();
-    console.log("Database connection closed");
-  }
+type ProductSeed = {
+  slug: string;
+  code?: string;
+  name: { ar: string; en: string };
+  brand?: string;
+  category: string;
+  price: number;
+  compareAtPrice?: number;
+  shape?: (typeof products.$inferInsert)["shape"];
+  colors: string[];
+  note?: { ar: string; en: string };
+  isBestSeller?: boolean;
+  requiresPrescription?: boolean;
+  supportsLensAddons?: boolean;
+  gender?: (typeof products.$inferInsert)["gender"];
 };
 
-// Run the seeder
-seedDatabase();
+const productSeed: ProductSeed[] = [
+  { slug: "vc-214", code: "VC 214", name: { ar: "إطار أسيتات مستطيل", en: "Rectangular acetate" }, brand: "vision-classic", category: "prescription", price: 75_000, compareAtPrice: 95_000, shape: "rectangle", colors: [swatches.black, swatches.brown, swatches.navy, swatches.gold], requiresPrescription: true },
+  { slug: "classic-metal", name: { ar: "إطار كلاسيك معدني", en: "Classic metal frame" }, category: "prescription", price: 85_000, shape: "oval", colors: [swatches.silver, swatches.gold, swatches.black], isBestSeller: true, requiresPrescription: true },
+  { slug: "aviator-sun", name: { ar: "شمسية أفياتور", en: "Aviator sunglasses" }, category: "sun", price: 120_000, shape: "aviator", colors: [swatches.gold, swatches.black, swatches.silver], isBestSeller: true, supportsLensAddons: false },
+  { slug: "monthly-contacts", name: { ar: "عدسات لاصقة شهرية", en: "Monthly contact lenses" }, category: "contact", price: 38_000, colors: [swatches.clear], isBestSeller: true, supportsLensAddons: false, requiresPrescription: true },
+  { slug: "kids-flex", name: { ar: "إطار أطفال مرن", en: "Flexible kids frame" }, category: "kids", price: 45_000, shape: "rectangle", colors: [swatches.navy, swatches.brown, swatches.black], isBestSeller: true, gender: "kids", requiresPrescription: true },
+  { slug: "titanium-half", name: { ar: "تيتانيوم نصف إطار", en: "Titanium half-rim" }, category: "prescription", price: 98_000, shape: "half-rim", colors: [swatches.silver, swatches.black], note: { ar: "خفيف · ٨ غرام", en: "Light · 8 g" }, requiresPrescription: true },
+  { slug: "thin-round", name: { ar: "إطار دائري رقيق", en: "Thin round frame" }, category: "prescription", price: 62_000, shape: "round", colors: [swatches.gold, swatches.black], requiresPrescription: true },
+  { slug: "metal-oval", name: { ar: "إطار معدني بيضاوي", en: "Oval metal frame" }, category: "prescription", price: 68_000, shape: "oval", colors: [swatches.silver, swatches.gold], requiresPrescription: true },
+  { slug: "full-acetate", name: { ar: "إطار كامل أسيتات", en: "Full-rim acetate" }, category: "prescription", price: 81_000, shape: "square", colors: [swatches.tortoise, swatches.black], requiresPrescription: true },
+  { slug: "vc-210", code: "VC 210", name: { ar: "إطار أسيتات VC 210", en: "Acetate frame VC 210" }, brand: "vision-classic", category: "prescription", price: 69_000, shape: "rectangle", colors: [swatches.black, swatches.tortoise], requiresPrescription: true },
+  { slug: "vc-233", code: "VC 233", name: { ar: "إطار أسيتات VC 233", en: "Acetate frame VC 233" }, brand: "vision-classic", category: "prescription", price: 82_000, shape: "square", colors: [swatches.navy, swatches.black], requiresPrescription: true },
+  { slug: "reading-150", name: { ar: "إطار قراءة +1.50", en: "Reading glasses +1.50" }, category: "prescription", price: 32_000, shape: "rectangle", colors: [swatches.black, swatches.brown] },
+  { slug: "daily-color-contacts", name: { ar: "عدسات ملونة يومية", en: "Daily coloured lenses" }, category: "contact", price: 28_000, colors: [swatches.clear], supportsLensAddons: false },
+  { slug: "titanium-men", name: { ar: "إطار تيتانيوم رجالي", en: "Men's titanium frame" }, category: "prescription", price: 98_000, shape: "rectangle", colors: [swatches.silver, swatches.navy], gender: "men", requiresPrescription: true },
+  { slug: "kids-sun", name: { ar: "شمسية أطفال", en: "Kids sunglasses" }, category: "kids", price: 34_000, shape: "round", colors: [swatches.navy, swatches.brown], gender: "kids", supportsLensAddons: false },
+  { slug: "square-sun", name: { ar: "شمسية مربعة", en: "Square sunglasses" }, category: "sun", price: 110_000, shape: "square", colors: [swatches.black, swatches.tortoise], note: { ar: "عدسة مستقطبة", en: "Polarised lens" }, supportsLensAddons: false },
+  { slug: "case-cleaner", name: { ar: "علبة + منظف عدسات", en: "Case + lens cleaner" }, category: "accessories", price: 9_000, colors: [swatches.black], supportsLensAddons: false },
+];
+
+async function main() {
+  logger.info("Seeding…");
+
+  const categoryIds = new Map<string, string>();
+  for (const c of categorySeed) {
+    const [row] = await db
+      .insert(categories)
+      .values(c)
+      .onConflictDoUpdate({ target: categories.slug, set: { nameAr: c.nameAr, nameEn: c.nameEn, sortOrder: c.sortOrder } })
+      .returning({ id: categories.id });
+    categoryIds.set(c.slug, row!.id);
+  }
+
+  const brandIds = new Map<string, string>();
+  for (const b of brandSeed) {
+    const [row] = await db.insert(brands).values(b).onConflictDoUpdate({ target: brands.slug, set: { nameAr: b.nameAr, nameEn: b.nameEn } }).returning({ id: brands.id });
+    brandIds.set(b.slug, row!.id);
+  }
+
+  for (const a of addonSeed) {
+    await db.insert(lensAddons).values(a).onConflictDoUpdate({ target: lensAddons.id, set: { nameAr: a.nameAr, nameEn: a.nameEn, price: a.price, sortOrder: a.sortOrder } });
+  }
+
+  for (const p of productSeed) {
+    const values: typeof products.$inferInsert = {
+      slug: p.slug,
+      code: p.code ?? null,
+      nameAr: p.name.ar,
+      nameEn: p.name.en,
+      noteAr: p.note?.ar ?? null,
+      noteEn: p.note?.en ?? null,
+      categoryId: categoryIds.get(p.category)!,
+      brandId: p.brand ? brandIds.get(p.brand)! : null,
+      price: p.price,
+      compareAtPrice: p.compareAtPrice ?? null,
+      shape: p.shape ?? null,
+      gender: p.gender ?? "unisex",
+      supportsLensAddons: p.supportsLensAddons ?? true,
+      requiresPrescription: p.requiresPrescription ?? false,
+      isBestSeller: p.isBestSeller ?? false,
+    };
+    const [row] = await db
+      .insert(products)
+      .values(values)
+      .onConflictDoUpdate({ target: products.slug, set: { ...values, updatedAt: sql`now()` } })
+      .returning({ id: products.id });
+
+    for (const [i, hex] of p.colors.entries()) {
+      await db
+        .insert(productVariants)
+        .values({ productId: row!.id, colorHex: hex, colorNameAr: colorNames[hex]?.ar, colorNameEn: colorNames[hex]?.en, stock: 25, sortOrder: i })
+        .onConflictDoUpdate({ target: [productVariants.productId, productVariants.colorHex], set: { sortOrder: i, colorNameAr: colorNames[hex]?.ar, colorNameEn: colorNames[hex]?.en } });
+    }
+  }
+
+  const existingDoctor = await db.query.doctors.findFirst({ where: eq(doctors.nameEn, "Dr. Ahmed Al-Saedy") });
+  if (!existingDoctor) {
+    await db.insert(doctors).values({ nameAr: "د. أحمد الصاعدي", nameEn: "Dr. Ahmed Al-Saedy", specialtyAr: "أخصائي بصريات", specialtyEn: "Optometrist" });
+  }
+
+  const existingBanner = await db.query.banners.findFirst({ where: eq(banners.titleEn, "Free eye exam with every frame") });
+  if (!existingBanner) {
+    await db.insert(banners).values([
+      { titleAr: "فحص نظر مجاني مع كل إطار", titleEn: "Free eye exam with every frame", subtitleAr: "احجز موعدك اليوم", subtitleEn: "Book your visit today", ctaAr: "احجز الآن", ctaEn: "Book now", link: "/book-exam", sortOrder: 1 },
+      { titleAr: "خصم ٢٠٪ على النظارات الشمسية", titleEn: "20% off sunglasses", subtitleAr: "تشكيلة الصيف", subtitleEn: "Summer collection", ctaAr: "تسوق", ctaEn: "Shop", link: "/categories?category=sun", sortOrder: 2 },
+    ]);
+  }
+
+  await db
+    .insert(promoCodes)
+    .values({ code: "WELCOME10", type: "percent", value: 10, minSubtotal: 50_000, maxDiscount: 20_000 })
+    .onConflictDoNothing();
+
+  logger.info({ categories: categorySeed.length, products: productSeed.length, addons: addonSeed.length }, "Seed complete");
+}
+
+try {
+  await main();
+} catch (err) {
+  logger.fatal({ err }, "Seed failed");
+  process.exitCode = 1;
+} finally {
+  await closeDatabase();
+}

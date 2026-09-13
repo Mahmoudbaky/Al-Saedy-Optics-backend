@@ -1,6 +1,13 @@
-.env.development
-.env.production
+# env
+.env
+.env.*
+!.env.example
 
+# build
 node_modules
 dist
+coverage
 
+# misc
+*.log
+.DS_Store

@@ -1,51 +1,69 @@
 import { z } from "zod";
-import dotenv from "dotenv";
 
-// Load environment-specific .env file based on NODE_ENV
-const nodeEnv = process.env.NODE_ENV || "development";
-dotenv.config({ path: `.env.${nodeEnv}` });
-dotenv.config(); // Also load .env for fallback
+/**
+ * Environment is loaded by the runtime (`node --env-file` / `tsx --env-file-if-exists`)
+ * or by the hosting platform (Vercel). We only validate here – no dotenv side effects –
+ * so that misconfiguration fails fast at boot with a readable message.
+ */
+const csv = (value: string | undefined) =>
+  (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
-// Define environment variables schema
 const envSchema = z.object({
-  // Server
-  PORT: z.string().default("3000"),
-  NODE_ENV: z.enum(["development", "production"]).default("development"),
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  PORT: z.coerce.number().int().positive().default(3000),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
+  APP_NAME: z.string().default("Al-Saedy Optics"),
 
-  // Database - Support both development and production URLs
-  MONGODB_URI: z.string(),
-  MONGODB_USER: z.string().optional(),
-  MONGODB_PASSWORD: z.string().optional(),
-  MONGODB_PROJECT: z.string().optional(),
+  BETTER_AUTH_URL: z.url(),
+  BETTER_AUTH_SECRET: z.string().min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
+  CORS_ORIGINS: z.string().optional().transform(csv),
+  MOBILE_APP_SCHEMES: z.string().default("alsaedyoptics://").transform(csv),
 
-  SWAGGER_BASE_URL: z.string().default("http://localhost:3000/api"),
+  DATABASE_URL: z.string().min(1),
+  DATABASE_URL_UNPOOLED: z.string().optional(),
 
-  // Uploadthing
-  UPLOADTHING_TOKEN: z.string(),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().default(587),
+  SMTP_SECURE: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+  EMAIL_FROM: z.string().default("Al-Saedy Optics <no-reply@localhost>"),
 
-  // Authentication
-  JWT_SECRET: z.string(),
-  JWT_EXPIRES_IN: z.string().default("24h"),
-  COOKIE_EXPIRES_IN: z.string().default("90d"),
+  UPLOADTHING_TOKEN: z.string().optional(),
 
-  TAX_RATE: z.string().default("0.15"),
+  CURRENCY: z.string().default("IQD"),
+  DELIVERY_FEE: z.coerce.number().int().min(0).default(5000),
+  FREE_DELIVERY_THRESHOLD: z.coerce.number().int().min(0).default(100_000),
 
-  // Email
-  EMAIL_SERVICE: z.string().optional(),
-  EMAIL_USER: z.string().optional(),
-  EMAIL_APP_PASSWORD: z.string().optional(),
-  EMAIL_FROM: z.string().optional(),
-
-  // App settings
-  APP_NAME: z.string().default("DevWave E-commerce"),
+  CLINIC_OPEN_HOUR: z.coerce.number().int().min(0).max(23).default(10),
+  CLINIC_CLOSE_HOUR: z.coerce.number().int().min(1).max(24).default(20),
+  CLINIC_SLOT_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
+  CLINIC_TIMEZONE: z.string().default("Asia/Baghdad"),
 });
 
-// Validate environment variables
-const _env = envSchema.safeParse(process.env);
+export type Env = z.infer<typeof envSchema>;
 
-if (!_env.success) {
-  console.error("❌ Invalid environment variables:", _env.error.format());
-  throw new Error("Invalid environment variables");
+function loadEnv(): Env {
+  const parsed = envSchema.safeParse(process.env);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("\n");
+    // Logger is not available yet – this is the one place console is acceptable.
+    console.error(`❌ Invalid environment variables:\n${issues}`);
+    process.exit(1);
+  }
+  return parsed.data;
 }
 
-export const env = _env.data;
+export const env = loadEnv();
+
+export const isProd = env.NODE_ENV === "production";
+export const isDev = env.NODE_ENV === "development";
+export const isTest = env.NODE_ENV === "test";

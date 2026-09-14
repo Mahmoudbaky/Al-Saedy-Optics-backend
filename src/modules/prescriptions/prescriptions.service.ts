@@ -44,6 +44,16 @@ function eyeColumns(input: Pick<UpdatePrescriptionInput, "od" | "os" | "pd" | "a
   };
 }
 
+/**
+ * Customers may order with a prescription that is still `pending`: staff verify it
+ * from the admin panel before the order moves to the lab. Only rejected or expired
+ * prescriptions are refused outright.
+ */
+export function assertUsableForOrder(rx: { status: string; expiresOn: string | null }): void {
+  if (rx.status === "rejected") throw new BadRequestError("Prescription was rejected – please add a new one");
+  if (rx.status === "expired" || (rx.expiresOn && new Date(rx.expiresOn) < new Date())) throw new BadRequestError("Prescription has expired");
+}
+
 function defaultExpiry(issuedOn: string | null | undefined): string | null {
   if (!issuedOn) return null;
   const d = new Date(issuedOn);
@@ -62,11 +72,10 @@ export const prescriptionsService = {
     return row;
   },
 
-  /** Verified & not expired – the only kind that can be attached to an order. */
+  /** A prescription that may be attached to a cart / order – see `assertUsableForOrder`. */
   async getUsable(userId: string, id: string) {
     const row = await this.getOwned(userId, id);
-    if (row.status !== "verified") throw new BadRequestError("Prescription has not been verified yet");
-    if (row.expiresOn && new Date(row.expiresOn) < new Date()) throw new BadRequestError("Prescription has expired");
+    assertUsableForOrder(row);
     return row;
   },
 

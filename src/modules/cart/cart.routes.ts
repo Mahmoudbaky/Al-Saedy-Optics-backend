@@ -50,7 +50,7 @@ r.route({
 r.route({
   method: "put",
   path: "/prescription",
-  summary: "Attach (or detach with null) a verified prescription to the order",
+  summary: "Attach (or detach with null) a prescription to the order (pending or verified; rejected/expired are refused)",
   body: attachPrescriptionSchema,
   response: cartResponseSchema,
   handler: ({ user, body }) => cartService.attachPrescription(user.id, body.prescriptionId),

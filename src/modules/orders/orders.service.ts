@@ -10,6 +10,7 @@ import { cartRepository } from "../cart/cart.repository.js";
 import { deliveryFeeFor, priceLines } from "../cart/cart.service.js";
 import { notificationsService } from "../notifications/notifications.service.js";
 import { prescriptionsRepository } from "../prescriptions/prescriptions.repository.js";
+import { assertUsableForOrder } from "../prescriptions/prescriptions.service.js";
 import { productsRepository } from "../products/products.repository.js";
 import { promoCodesRepository } from "../promo-codes/promo-codes.repository.js";
 import { promoCodesService } from "../promo-codes/promo-codes.service.js";
@@ -68,11 +69,10 @@ export const ordersService = {
       let prescription: PrescriptionSnapshot | null = null;
       const prescriptionId = input.prescriptionId ?? cart.prescriptionId;
       if (lines.some((l) => l.item.product.requiresPrescription)) {
-        if (!prescriptionId) throw new BadRequestError("A verified prescription is required for the items in your cart");
+        if (!prescriptionId) throw new BadRequestError("A prescription is required for the items in your cart");
         const rx = await prescriptionsRepository.findOwned(userId, prescriptionId, tx);
         if (!rx) throw new BadRequestError("Prescription not found");
-        if (rx.status !== "verified") throw new BadRequestError("Your prescription has not been verified yet");
-        if (rx.expiresOn && new Date(rx.expiresOn) < new Date()) throw new BadRequestError("Your prescription has expired");
+        assertUsableForOrder(rx);
         prescription = { id: rx.id, od: { sph: rx.odSph, cyl: rx.odCyl, axis: rx.odAxis }, os: { sph: rx.osSph, cyl: rx.osCyl, axis: rx.osAxis }, pd: rx.pd, add: rx.addPower };
       }
 

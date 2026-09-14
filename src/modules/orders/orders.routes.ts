@@ -24,7 +24,7 @@ me.route({
   summary: "Place an order from my cart",
   description:
     "Totals are recomputed on the server. Home delivery needs an address (defaults to the default address); " +
-    "items flagged `requiresPrescription` need a verified prescription attached to the cart or passed here. " +
+    "items flagged `requiresPrescription` need a prescription attached to the cart or passed here (pending ones are allowed – staff verify before the lab step; rejected/expired are refused). " +
     "Cash-on-delivery orders start as `confirmed`; card/wallet start as `pending` until staff confirm payment.",
   middleware: [strictRateLimit],
   body: checkoutSchema,

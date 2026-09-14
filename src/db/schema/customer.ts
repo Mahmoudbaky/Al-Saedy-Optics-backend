@@ -111,7 +111,7 @@ export const deviceTokens = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     token: text("token").notNull().unique(),
     platform: devicePlatformEnum("platform").notNull(),
-    lastSeenAt: timestamps.createdAt,
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamps.createdAt,
   },
   (t) => [index("device_tokens_user_idx").on(t.userId)],

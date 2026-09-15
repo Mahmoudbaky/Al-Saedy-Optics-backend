@@ -33,7 +33,7 @@ export const ordersRepository = {
 
   adminFilters(q: AdminListOrdersQuery): SQL[] {
     const f: SQL[] = [];
-    if (q.status) f.push(eq(orders.status, q.status));
+    if (q.status?.length) f.push(q.status.length === 1 ? eq(orders.status, q.status[0]!) : inArray(orders.status, q.status));
     if (q.paymentStatus) f.push(eq(orders.paymentStatus, q.paymentStatus));
     if (q.deliveryMethod) f.push(eq(orders.deliveryMethod, q.deliveryMethod));
     if (q.userId) f.push(eq(orders.userId, q.userId));

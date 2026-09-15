@@ -28,6 +28,7 @@ export const paymentStatusEnum = pgEnum("payment_status", PAYMENT_STATUSES);
 
 export const PRESCRIPTION_STATUSES = ["pending", "verified", "expired", "rejected"] as const;
 export const prescriptionStatusEnum = pgEnum("prescription_status", PRESCRIPTION_STATUSES);
+export type PrescriptionStatus = (typeof PRESCRIPTION_STATUSES)[number];
 
 export const PRESCRIPTION_SOURCES = ["manual", "upload", "clinic"] as const;
 export const prescriptionSourceEnum = pgEnum("prescription_source", PRESCRIPTION_SOURCES);

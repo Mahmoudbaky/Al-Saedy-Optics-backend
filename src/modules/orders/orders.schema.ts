@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { DELIVERY_METHODS, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES } from "../../db/schema/enums.js";
+import { DELIVERY_METHODS, ORDER_STATUSES,
+  PRESCRIPTION_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES } from "../../db/schema/enums.js";
 import { localizedStringSchema } from "../../lib/i18n.js";
 import { paginationQuerySchema } from "../../lib/pagination.js";
 import { phoneSchema, uuidSchema } from "../../lib/schemas.js";
@@ -21,7 +22,13 @@ export const listMyOrdersQuerySchema = paginationQuerySchema.extend({
 });
 
 export const adminListOrdersQuerySchema = paginationQuerySchema.extend({
-  status: z.enum(ORDER_STATUSES).optional(),
+  /** One status or a comma-separated list, e.g. `pending,confirmed,lab` for the "needs action" queue. */
+  status: z
+    .string()
+    .trim()
+    .transform((v) => v.split(",").map((s) => s.trim()).filter(Boolean))
+    .pipe(z.array(z.enum(ORDER_STATUSES)).min(1).max(ORDER_STATUSES.length))
+    .optional(),
   paymentStatus: z.enum(PAYMENT_STATUSES).optional(),
   deliveryMethod: z.enum(DELIVERY_METHODS).optional(),
   userId: uuidSchema.optional(),
@@ -103,6 +110,10 @@ export type OrderDto = z.infer<typeof orderResponseSchema>;
 
 export const adminOrderResponseSchema = orderResponseSchema.extend({
   adminNote: z.string().nullable(),
+  /** Live status of the attached prescription (the snapshot above is frozen at checkout). */
+  prescriptionStatus: z.enum(PRESCRIPTION_STATUSES).nullable(),
+  /** Transitions allowed from the current status – drives the admin action buttons. */
+  nextStatuses: z.array(z.enum(ORDER_STATUSES)),
   user: z.object({ id: z.uuid(), name: z.string(), email: z.string(), phone: z.string().nullable() }),
   events: z.array(z.object({ status: z.enum(ORDER_STATUSES), at: z.string(), note: z.string().nullable(), actorId: z.uuid().nullable() })),
 });

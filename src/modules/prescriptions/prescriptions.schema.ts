@@ -88,3 +88,10 @@ export type UpdatePrescriptionInput = z.infer<typeof updatePrescriptionSchema>;
 export type ReviewPrescriptionInput = z.infer<typeof reviewPrescriptionSchema>;
 export type AdminListPrescriptionsQuery = z.infer<typeof adminListPrescriptionsQuerySchema>;
 export type PrescriptionDto = z.infer<typeof prescriptionResponseSchema>;
+
+/** Admin queue rows carry the owner and the open order (if any) blocked on this prescription. */
+export const adminPrescriptionResponseSchema = prescriptionResponseSchema.extend({
+  user: z.object({ id: z.uuid(), name: z.string(), email: z.string(), phone: z.string().nullable() }),
+  waitingOrderNumber: z.number().nullable(),
+});
+export type AdminPrescriptionDto = z.infer<typeof adminPrescriptionResponseSchema>;

@@ -1,6 +1,7 @@
 import { env } from "../../config/env.js";
 import { formatAddress } from "../addresses/addresses.service.js";
-import { CUSTOMER_CANCELLABLE, timelineFor } from "./orders.status.js";
+import { CUSTOMER_CANCELLABLE, ORDER_TRANSITIONS, timelineFor } from "./orders.status.js";
+import type { PrescriptionStatus } from "../../db/schema/enums.js";
 import type { OrderWithRelations } from "./orders.repository.js";
 import type { AdminOrderDto, OrderDto } from "./orders.schema.js";
 
@@ -68,10 +69,12 @@ export function toOrderDto(o: OrderWithRelations): OrderDto {
   };
 }
 
-export function toAdminOrderDto(o: OrderWithRelations): AdminOrderDto {
+export function toAdminOrderDto(o: OrderWithRelations, rxStatus: Map<string, PrescriptionStatus> = new Map()): AdminOrderDto {
   return {
     ...toOrderDto(o),
     adminNote: o.adminNote,
+    prescriptionStatus: o.prescription ? (rxStatus.get(o.prescription.id) ?? null) : null,
+    nextStatuses: [...ORDER_TRANSITIONS[o.status]],
     user: { id: o.user.id, name: o.user.name, email: o.user.email, phone: o.user.phone },
     events: o.events.map((e) => ({ status: e.status, at: e.createdAt.toISOString(), note: e.note, actorId: e.actorId })),
   };

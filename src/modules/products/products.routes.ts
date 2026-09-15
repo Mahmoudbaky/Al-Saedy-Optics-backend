@@ -58,9 +58,9 @@ const imageParams = z.object({ id: uuidSchema, imageId: uuidSchema });
 admin.route({
   method: "get",
   path: "/",
-  summary: "List products (incl. inactive, low-stock filter)",
+  summary: "List products (incl. inactive, low-stock filter) – detail rows with variants and stock",
   query: adminListProductsQuerySchema,
-  response: z.array(productCardSchema),
+  response: z.array(productDetailSchema),
   handler: async ({ query }) => {
     const { items, meta } = await productsService.adminList(query);
     return reply(items, { meta });

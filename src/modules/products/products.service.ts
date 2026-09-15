@@ -87,9 +87,10 @@ export const productsService = {
   },
 
   // ---- admin ---------------------------------------------------------------
+  /** Admin rows carry variants/stock and sales so the catalogue table needs no per-row fetch. */
   async adminList(query: AdminListProductsQuery) {
     const { rows, total } = await productsRepository.list(query, { includeInactive: query.includeInactive ?? true });
-    return { items: rows.map(toProductCard), meta: pageMeta(total, query) };
+    return { items: rows.map((p) => toProductDetail(p, [])), meta: pageMeta(total, query) };
   },
 
   async adminGet(id: string) {

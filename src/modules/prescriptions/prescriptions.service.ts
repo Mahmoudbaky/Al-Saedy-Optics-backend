@@ -120,8 +120,9 @@ export const prescriptionsService = {
     if (query.status) filters.push(eq(prescriptions.status, query.status));
     if (query.userId) filters.push(eq(prescriptions.userId, query.userId));
     const { rows, total } = await prescriptionsRepository.list(filters, query);
+    const waiting = await prescriptionsRepository.waitingOrders(rows.map((r) => r.id));
     return {
-      items: rows.map((r) => ({ ...toPrescriptionDto(r), user: r.user })),
+      items: rows.map((r) => ({ ...toPrescriptionDto(r), user: r.user, waitingOrderNumber: waiting.get(r.id) ?? null })),
       meta: pageMeta(total, query),
     };
   },

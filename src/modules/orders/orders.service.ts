@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { createLogger } from "../../config/logger.js";
 import { db } from "../../db/index.js";
 import { orders, type AddressSnapshot, type PrescriptionSnapshot } from "../../db/schema/index.js";
-import type { OrderStatus } from "../../db/schema/enums.js";
+import type { OrderStatus, PrescriptionStatus } from "../../db/schema/enums.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { pageMeta } from "../../lib/pagination.js";
 import { addressesRepository } from "../addresses/addresses.repository.js";
@@ -43,6 +43,13 @@ async function notifyStatus(order: OrderWithRelations, status: OrderStatus) {
     },
     order.user.locale,
   );
+}
+
+/** The order keeps a frozen Rx snapshot; staff need the prescription's current status. */
+async function liveRxStatus(rows: OrderWithRelations[]): Promise<Map<string, PrescriptionStatus>> {
+  const ids = [...new Set(rows.flatMap((r) => (r.prescription ? [r.prescription.id] : [])))];
+  const found = await prescriptionsRepository.findByIds(ids);
+  return new Map(found.map((p) => [p.id, p.status]));
 }
 
 export const ordersService = {
@@ -170,13 +177,14 @@ export const ordersService = {
   // ---- admin ---------------------------------------------------------------------
   async adminList(query: AdminListOrdersQuery) {
     const { rows, total } = await ordersRepository.list(ordersRepository.adminFilters(query), query);
-    return { items: rows.map(toAdminOrderDto), meta: pageMeta(total, query) };
+    const rxStatus = await liveRxStatus(rows);
+    return { items: rows.map((r) => toAdminOrderDto(r, rxStatus)), meta: pageMeta(total, query) };
   },
 
   async adminGet(id: string) {
     const order = await ordersRepository.findById(id);
     if (!order) throw new NotFoundError("Order", id);
-    return { ...toAdminOrderDto(order), nextStatuses: ORDER_TRANSITIONS[order.status] };
+    return toAdminOrderDto(order, await liveRxStatus([order]));
   },
 
   async updateStatus(id: string, status: OrderStatus, note: string | undefined, actorId: string) {

@@ -4,6 +4,7 @@ import { createModuleRouter } from "../../lib/router.js";
 import { idParamSchema } from "../../lib/schemas.js";
 import {
   adminListPrescriptionsQuerySchema,
+  adminPrescriptionResponseSchema,
   createPrescriptionSchema,
   prescriptionResponseSchema,
   reviewPrescriptionSchema,
@@ -58,7 +59,7 @@ admin.route({
   path: "/",
   summary: "List prescriptions awaiting review",
   query: adminListPrescriptionsQuerySchema,
-  response: z.array(prescriptionResponseSchema),
+  response: z.array(adminPrescriptionResponseSchema),
   handler: async ({ query }) => {
     const { items, meta } = await prescriptionsService.adminList(query);
     return reply(items, { meta });

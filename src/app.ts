@@ -37,7 +37,9 @@ export function createApp(): Express {
       },
       credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id", "x-uploadthing-package", "x-uploadthing-version"],
+      // No `allowedHeaders`: reflect whatever the allow-listed origin asks for in the preflight.
+      // UploadThing's browser client adds tracing headers (`b3`, `traceparent`) on top of its
+      // `x-uploadthing-*` ones, and a fixed list silently breaks its preflight.
       exposedHeaders: ["X-Request-Id", "set-auth-token"],
       maxAge: 86_400,
     }),

@@ -15,6 +15,8 @@ Express 5 + TypeScript (ESM, NodeNext) · Drizzle ORM on Neon Postgres (`pg` dri
 - Throw `AppError` subclasses (src/lib/errors.ts); never `res.status().json()` errors by hand.
 - Bilingual text = `<field>Ar`/`<field>En` columns, exposed as `{ ar, en }` via `localized()` / `toColumns()`.
 - Prices are integer IQD. Ids are UUIDs (Better Auth users included).
+- Prescriptions are per cart/order line (`prescriptionId` xor `appointmentId`); derive state with
+  `resolveLineRx()` in src/modules/prescriptions/rx-line.ts — never re-implement the rules elsewhere.
 - Better Auth handler is mounted before `express.json()` — keep it that way.
 - Log with `createLogger("module")` or `req.log`; never `console.*`.
 - Public routes: `/api/v1/...`; customer: `/api/v1/me/...`; admin: `/api/v1/admin/...`; auth: `/api/auth/...`.

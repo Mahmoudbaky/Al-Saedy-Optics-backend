@@ -79,7 +79,8 @@ import {
   user,
   wishlistItems,
 } from "../db/schema/index.js";
-import type { AddressSnapshot, OrderItemAddon, OrderStatus, PrescriptionSnapshot } from "../db/schema/index.js";
+import type { AddressSnapshot, OrderItemAddon, OrderStatus } from "../db/schema/index.js";
+import { snapshotOf } from "../modules/prescriptions/rx-line.js";
 import { zonedTimeToUtc } from "../lib/time.js";
 
 const DEMO_EMAIL_DOMAIN = "demo.alsaedy.iq";
@@ -613,6 +614,8 @@ type OrderSeed = {
   paymentStatus?: "unpaid" | "paid" | "refunded";
   addressIndex?: number;
   prescriptionIndex?: number | null;
+  /** Exam-first flow: Rx lines wait for the prescription from this appointment (index into appointmentSeed). */
+  appointmentIndex?: number;
   promoCode?: string;
   lines: OrderLineSeed[];
   customerNote?: string;
@@ -633,8 +636,8 @@ const orderSeed: OrderSeed[] = [
     events: [["pending", 30], ["confirmed", 30, "Rx verified, sent to lab"], ["lab", 29], ["onTheWay", 26], ["delivered", 25]],
   },
   {
-    // Contact lenses re-order, delivered fast (no lab step)
-    customer: "ali", daysAgo: 12, status: "delivered", paymentMethod: "card", paymentStatus: "paid",
+    // Contact lenses re-order, delivered fast (no lab step) – uses his current clinic Rx
+    customer: "ali", daysAgo: 12, status: "delivered", paymentMethod: "card", paymentStatus: "paid", prescriptionIndex: 0,
     lines: [{ product: "acuvue-oasys-2-week", color: swatch.clear, qty: 2, variantLabel: "OD -2.25 / OS -2.00" }, { product: "renu-solution-360", color: swatch.green }],
     courier: { name: "حيدر", phone: "+9647700000002" },
     events: [["pending", 12], ["confirmed", 12], ["onTheWay", 11], ["delivered", 10]],
@@ -668,8 +671,8 @@ const orderSeed: OrderSeed[] = [
     events: [["pending", 15], ["cancelled", 14, "Cancelled by customer"]],
   },
   {
-    // Fresh order still pending – no Rx yet on it (kids frame ordered for exam-first flow)
-    customer: "noor", daysAgo: 0, status: "pending", paymentMethod: "cod",
+    // Fresh order still pending – exam-first flow: the kids frame waits for the prescription from the booked exam
+    customer: "noor", daysAgo: 0, status: "pending", paymentMethod: "cod", appointmentIndex: 5,
     lines: [{ product: "vc-kids-flex-tr90", color: swatch.pink, addons: ["hardCoat"] }, { product: "vc-kids-sun", color: swatch.pink }],
     customerNote: "الوصفة سأرفعها بعد الفحص يوم الخميس",
     events: [["pending", 0]],
@@ -836,6 +839,32 @@ async function main() {
     await db.insert(deviceTokens).values({ userId, platform: c.key === "omar" ? "ios" : "android", token: `ExponentPushToken[demo-${c.key}-${userId.slice(0, 8)}]` });
   }
 
+  /* appointments (needed before orders/carts for the exam-first flow) --- */
+  const slot = (daysFromNow: number, hour: number, minute: number, doctorEn: string) => {
+    const d = daysAgo(-daysFromNow);
+    // walk forward to a working day of that doctor (ISO 1=Mon … 7=Sun)
+    const days = doctorSeed.find((x) => x.nameEn === doctorEn)!.workingDays;
+    for (let i = 0; i < 7; i++) {
+      const iso = String(((d.getUTCDay() + 6) % 7) + 1);
+      if (days.includes(iso)) break;
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return zonedTimeToUtc(ymd(d), hour, minute, env.CLINIC_TIMEZONE);
+  };
+  const ahmed = "Dr. Ahmed Al-Saedy";
+  const sara = "Dr. Sara Al-Jubouri";
+  const hussein = "Dr. Hussein Al-Rubaie";
+  const apptRows = await db.insert(appointments).values([
+    { userId: userIds.get("ali")!, doctorId: doctorIds.get(ahmed)!, scheduledAt: slot(-40, 11, 0, ahmed), reason: "exam", status: "completed", notes: "Annual check – Rx updated" },
+    { userId: userIds.get("zainab")!, doctorId: doctorIds.get(sara)!, scheduledAt: slot(-20, 16, 30, sara), reason: "rx", status: "completed" },
+    { userId: userIds.get("noor")!, doctorId: doctorIds.get(ahmed)!, scheduledAt: slot(-8, 12, 0, ahmed), reason: "exam", status: "noShow" },
+    { userId: userIds.get("omar")!, doctorId: doctorIds.get(hussein)!, scheduledAt: slot(-3, 18, 0, hussein), reason: "contacts", status: "cancelled", notes: "Travelling" },
+    { userId: userIds.get("mustafa")!, doctorId: doctorIds.get(ahmed)!, scheduledAt: slot(2, 10, 30, ahmed), reason: "exam", status: "confirmed", remindMe: true, notes: "First visit – headaches when reading" },
+    { userId: userIds.get("noor")!, doctorId: doctorIds.get(sara)!, scheduledAt: slot(4, 15, 0, sara), reason: "exam", status: "booked", notes: "For daughter (6 years)" },
+    { userId: userIds.get("zainab")!, doctorId: doctorIds.get(hussein)!, scheduledAt: slot(6, 17, 30, hussein), reason: "contacts", status: "booked", notes: "Wants to try multifocal contacts" },
+  ]).returning({ id: appointments.id, userId: appointments.userId, status: appointments.status });
+  const mustafaExam = apptRows.find((a) => a.userId === userIds.get("mustafa") && a.status === "confirmed")!;
+
   /* orders ----------------------------------------------------------- */
   const soldCount = new Map<string, number>();
   for (const o of orderSeed) {
@@ -843,6 +872,10 @@ async function main() {
     const method = o.deliveryMethod ?? "home";
     const addr = method === "home" ? addressRows.get(o.customer)![o.addressIndex ?? 0] : undefined;
     const rx = o.prescriptionIndex != null ? rxRows.get(o.customer)![o.prescriptionIndex] : undefined;
+    const appointmentId = o.appointmentIndex != null ? apptRows[o.appointmentIndex]!.id : null;
+    // Every Rx line of a seeded order needs a source (saved Rx or exam) – the checkout API enforces this too.
+    const needsRx = o.lines.filter((l) => productSeed.find((x) => x.slug === l.product)!.requiresPrescription);
+    if (needsRx.length && !rx && !appointmentId) throw new Error(`Order for ${o.customer} has Rx lines (${needsRx.map((l) => l.product).join(", ")}) but no prescriptionIndex / appointmentIndex`);
 
     const items: (Omit<typeof orderItems.$inferInsert, "orderId">)[] = o.lines.map((l) => {
       const p = productSeed.find((x) => x.slug === l.product)!;
@@ -852,6 +885,7 @@ async function main() {
       });
       const unitPrice = p.price + addonsSnap.reduce((s, a) => s + a.price, 0);
       const quantity = l.qty ?? 1;
+      const requiresPrescription = p.requiresPrescription ?? false;
       return {
         productId: productIds.get(l.product)!,
         variantId: variantIds.get(`${l.product}|${l.color.hex}`)!,
@@ -865,6 +899,11 @@ async function main() {
         unitPrice,
         quantity,
         lineTotal: unitPrice * quantity,
+        // Per-line prescription: the order's chosen Rx applies to every line that needs one.
+        requiresPrescription,
+        prescriptionId: requiresPrescription && rx ? rx.id : null,
+        appointmentId: requiresPrescription && !rx ? appointmentId : null,
+        prescriptionSnapshot: requiresPrescription && rx ? snapshotOf(rx) : null,
       };
     });
 
@@ -881,10 +920,6 @@ async function main() {
     const addressSnap: AddressSnapshot | null = addr
       ? { recipientName: addr.recipientName, phone: addr.phone, city: addr.city, area: addr.area, street: addr.street, building: addr.building, notes: addr.notes }
       : null;
-    const rxSnap: PrescriptionSnapshot | null = rx
-      ? { id: rx.id, od: { sph: rx.odSph, cyl: rx.odCyl, axis: rx.odAxis }, os: { sph: rx.osSph, cyl: rx.osCyl, axis: rx.osAxis }, pd: rx.pd, add: rx.addPower }
-      : null;
-
     const createdAt = daysAgo(o.daysAgo, 10);
     const [order] = await db
       .insert(orders)
@@ -895,7 +930,6 @@ async function main() {
         paymentMethod: o.paymentMethod ?? "cod",
         paymentStatus: o.paymentStatus ?? "unpaid",
         address: addressSnap,
-        prescription: rxSnap,
         subtotal,
         discount,
         deliveryFee,
@@ -932,17 +966,6 @@ async function main() {
     if (notes.length) await db.insert(notifications).values(notes);
   }
 
-  /* carts (live, not yet checked out) -------------------------------- */
-  const [aliCart] = await db.insert(carts).values({ userId: userIds.get("ali")!, prescriptionId: rxRows.get("ali")![0]!.id, promoCode: "SUMMER20" }).returning({ id: carts.id });
-  await db.insert(cartItems).values([
-    { cartId: aliCart!.id, productId: productIds.get("ray-ban-rb3025-aviator")!, variantId: variantIds.get(`ray-ban-rb3025-aviator|${swatch.gold.hex}`)!, quantity: 1, addonIds: ["polarized"] },
-    { cartId: aliCart!.id, productId: productIds.get("vc-titanium-half-rim")!, variantId: variantIds.get(`vc-titanium-half-rim|${swatch.gunmetal.hex}`)!, quantity: 1, addonIds: ["antiGlare", "blueLight", "thin"].sort() },
-  ]);
-  const [mustafaCart] = await db.insert(carts).values({ userId: userIds.get("mustafa")! }).returning({ id: carts.id });
-  await db.insert(cartItems).values([
-    { cartId: mustafaCart!.id, productId: productIds.get("dailies-total1")!, variantId: variantIds.get(`dailies-total1|${swatch.clear.hex}`)!, quantity: 2, variantLabel: "OD -1.00 / OS -1.25" },
-  ]);
-
   /* wishlist --------------------------------------------------------- */
   await db.insert(wishlistItems).values([
     { userId: userIds.get("ali")!, productId: productIds.get("persol-po3007v")! },
@@ -971,29 +994,20 @@ async function main() {
   /* appointments ----------------------------------------------------- */
   // Slots are on the clinic grid (10:00-20:00 Baghdad, every 30 min) and on a
   // day the doctor works, so the booking module treats them as valid.
-  const slot = (daysFromNow: number, hour: number, minute: number, doctorEn: string) => {
-    const d = daysAgo(-daysFromNow);
-    // walk forward to a working day of that doctor (ISO 1=Mon … 7=Sun)
-    const days = doctorSeed.find((x) => x.nameEn === doctorEn)!.workingDays;
-    for (let i = 0; i < 7; i++) {
-      const iso = String(((d.getUTCDay() + 6) % 7) + 1);
-      if (days.includes(iso)) break;
-      d.setUTCDate(d.getUTCDate() + 1);
-    }
-    return zonedTimeToUtc(ymd(d), hour, minute, env.CLINIC_TIMEZONE);
-  };
-  const ahmed = "Dr. Ahmed Al-Saedy";
-  const sara = "Dr. Sara Al-Jubouri";
-  const hussein = "Dr. Hussein Al-Rubaie";
-  await db.insert(appointments).values([
-    { userId: userIds.get("ali")!, doctorId: doctorIds.get(ahmed)!, scheduledAt: slot(-40, 11, 0, ahmed), reason: "exam", status: "completed", notes: "Annual check – Rx updated" },
-    { userId: userIds.get("zainab")!, doctorId: doctorIds.get(sara)!, scheduledAt: slot(-20, 16, 30, sara), reason: "rx", status: "completed" },
-    { userId: userIds.get("noor")!, doctorId: doctorIds.get(ahmed)!, scheduledAt: slot(-8, 12, 0, ahmed), reason: "exam", status: "noShow" },
-    { userId: userIds.get("omar")!, doctorId: doctorIds.get(hussein)!, scheduledAt: slot(-3, 18, 0, hussein), reason: "contacts", status: "cancelled", notes: "Travelling" },
-    { userId: userIds.get("mustafa")!, doctorId: doctorIds.get(ahmed)!, scheduledAt: slot(2, 10, 30, ahmed), reason: "exam", status: "confirmed", remindMe: true, notes: "First visit – headaches when reading" },
-    { userId: userIds.get("noor")!, doctorId: doctorIds.get(sara)!, scheduledAt: slot(4, 15, 0, sara), reason: "exam", status: "booked", notes: "For daughter (6 years)" },
-    { userId: userIds.get("zainab")!, doctorId: doctorIds.get(hussein)!, scheduledAt: slot(6, 17, 30, hussein), reason: "contacts", status: "booked", notes: "Wants to try multifocal contacts" },
+  /* carts (live, not yet checked out) -------------------------------- */
+  const [aliCart] = await db.insert(carts).values({ userId: userIds.get("ali")!, promoCode: "SUMMER20" }).returning({ id: carts.id });
+  await db.insert(cartItems).values([
+    { cartId: aliCart!.id, productId: productIds.get("ray-ban-rb3025-aviator")!, variantId: variantIds.get(`ray-ban-rb3025-aviator|${swatch.gold.hex}`)!, quantity: 1, addonIds: ["polarized"] },
+    // Option 1 – frame fulfilled with a saved prescription
+    { cartId: aliCart!.id, productId: productIds.get("vc-titanium-half-rim")!, variantId: variantIds.get(`vc-titanium-half-rim|${swatch.gunmetal.hex}`)!, quantity: 1, addonIds: ["antiGlare", "blueLight", "thin"].sort(), prescriptionId: rxRows.get("ali")![0]!.id },
   ]);
+  const [mustafaCart] = await db.insert(carts).values({ userId: userIds.get("mustafa")! }).returning({ id: carts.id });
+  await db.insert(cartItems).values([
+    { cartId: mustafaCart!.id, productId: productIds.get("dailies-total1")!, variantId: variantIds.get(`dailies-total1|${swatch.clear.hex}`)!, quantity: 2, variantLabel: "OD -1.00 / OS -1.25" },
+    // Option 2 – first-time wearer: the frame waits for the prescription from his upcoming eye exam
+    { cartId: mustafaCart!.id, productId: productIds.get("ray-ban-rx7047")!, variantId: variantIds.get(`ray-ban-rx7047|${swatch.matteBlack.hex}`)!, quantity: 1, addonIds: ["blueLight"], appointmentId: mustafaExam.id },
+  ]);
+
 
   await db.insert(notifications).values([
     { userId: userIds.get("mustafa")!, titleAr: "تذكير بموعدك", titleEn: "Appointment reminder", bodyAr: "موعدك مع د. أحمد الصاعدي بعد يومين الساعة ١٠:٣٠", bodyEn: "Your visit with Dr. Ahmed Al-Saedy is in 2 days at 10:30", link: "/appointments" },

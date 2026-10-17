@@ -1,20 +1,19 @@
 import { eq } from "drizzle-orm";
 import { createLogger } from "../../config/logger.js";
 import { db } from "../../db/index.js";
-import { orders, type AddressSnapshot, type PrescriptionSnapshot } from "../../db/schema/index.js";
-import type { OrderStatus, PrescriptionStatus } from "../../db/schema/enums.js";
+import { orders, type AddressSnapshot } from "../../db/schema/index.js";
+import type { OrderStatus } from "../../db/schema/enums.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { pageMeta } from "../../lib/pagination.js";
 import { addressesRepository } from "../addresses/addresses.repository.js";
 import { cartRepository } from "../cart/cart.repository.js";
 import { deliveryFeeFor, priceLines } from "../cart/cart.service.js";
 import { notificationsService } from "../notifications/notifications.service.js";
-import { prescriptionsRepository } from "../prescriptions/prescriptions.repository.js";
-import { assertUsableForOrder } from "../prescriptions/prescriptions.service.js";
+import { isLabReady, snapshotOf } from "../prescriptions/rx-line.js";
 import { productsRepository } from "../products/products.repository.js";
 import { promoCodesRepository } from "../promo-codes/promo-codes.repository.js";
 import { promoCodesService } from "../promo-codes/promo-codes.service.js";
-import { toAdminOrderDto, toOrderDto } from "./orders.mapper.js";
+import { lineRx, toAdminOrderDto, toOrderDto } from "./orders.mapper.js";
 import { ordersRepository, type OrderWithRelations } from "./orders.repository.js";
 import type { AdminListOrdersQuery, CheckoutInput, updateOrderDetailsSchema } from "./orders.schema.js";
 import { canTransition, CUSTOMER_CANCELLABLE, ORDER_TRANSITIONS, STATUS_LABELS } from "./orders.status.js";
@@ -45,13 +44,6 @@ async function notifyStatus(order: OrderWithRelations, status: OrderStatus) {
   );
 }
 
-/** The order keeps a frozen Rx snapshot; staff need the prescription's current status. */
-async function liveRxStatus(rows: OrderWithRelations[]): Promise<Map<string, PrescriptionStatus>> {
-  const ids = [...new Set(rows.flatMap((r) => (r.prescription ? [r.prescription.id] : [])))];
-  const found = await prescriptionsRepository.findByIds(ids);
-  return new Map(found.map((p) => [p.id, p.status]));
-}
-
 export const ordersService = {
   // ---- customer ---------------------------------------------------------------
   async checkout(userId: string, input: CheckoutInput) {
@@ -72,15 +64,13 @@ export const ordersService = {
         address = { recipientName: row.recipientName, phone: row.phone, city: row.city, area: row.area, street: row.street, building: row.building, notes: row.notes };
       }
 
-      // Prescription (only when a line needs one)
-      let prescription: PrescriptionSnapshot | null = null;
-      const prescriptionId = input.prescriptionId ?? cart.prescriptionId;
-      if (lines.some((l) => l.item.product.requiresPrescription)) {
-        if (!prescriptionId) throw new BadRequestError("A prescription is required for the items in your cart");
-        const rx = await prescriptionsRepository.findOwned(userId, prescriptionId, tx);
-        if (!rx) throw new BadRequestError("Prescription not found");
-        assertUsableForOrder(rx);
-        prescription = { id: rx.id, od: { sph: rx.odSph, cyl: rx.odCyl, axis: rx.odAxis }, os: { sph: rx.osSph, cyl: rx.osCyl, axis: rx.osAxis }, pd: rx.pd, add: rx.addPower };
+      // Prescriptions are per line: each Rx item needs a saved prescription or a booked eye exam.
+      const rxBlocked = lines.filter((l) => !l.rx.ready);
+      if (rxBlocked.length) {
+        throw new BadRequestError(
+          "Some items still need a prescription – choose one of yours or book an eye exam",
+          rxBlocked.map((l) => ({ itemId: l.item.id, state: l.rx.state, issue: l.rx.issue })),
+        );
       }
 
       // Totals – recomputed server side, never trusted from the client.
@@ -101,7 +91,6 @@ export const ordersService = {
           paymentMethod: input.paymentMethod,
           paymentStatus: "unpaid",
           address,
-          prescription,
           subtotal,
           discount,
           deliveryFee,
@@ -122,6 +111,11 @@ export const ordersService = {
           unitPrice: l.unitPrice,
           quantity: l.item.quantity,
           lineTotal: l.lineTotal,
+          requiresPrescription: l.item.product.requiresPrescription,
+          prescriptionId: l.item.prescriptionId,
+          appointmentId: l.item.appointmentId,
+          // Freeze the values now when a prescription exists; exam-based lines get theirs when the clinic records it.
+          prescriptionSnapshot: l.item.prescription ? snapshotOf(l.item.prescription) : null,
         })),
         tx,
       );
@@ -177,14 +171,13 @@ export const ordersService = {
   // ---- admin ---------------------------------------------------------------------
   async adminList(query: AdminListOrdersQuery) {
     const { rows, total } = await ordersRepository.list(ordersRepository.adminFilters(query), query);
-    const rxStatus = await liveRxStatus(rows);
-    return { items: rows.map((r) => toAdminOrderDto(r, rxStatus)), meta: pageMeta(total, query) };
+    return { items: rows.map(toAdminOrderDto), meta: pageMeta(total, query) };
   },
 
   async adminGet(id: string) {
     const order = await ordersRepository.findById(id);
     if (!order) throw new NotFoundError("Order", id);
-    return toAdminOrderDto(order, await liveRxStatus([order]));
+    return toAdminOrderDto(order);
   },
 
   async updateStatus(id: string, status: OrderStatus, note: string | undefined, actorId: string) {
@@ -192,6 +185,16 @@ export const ordersService = {
     if (!order) throw new NotFoundError("Order", id);
     if (!canTransition(order.status, status)) {
       throw new BadRequestError(`Cannot move an order from '${order.status}' to '${status}'`, { allowed: ORDER_TRANSITIONS[order.status] });
+    }
+    if (status === "lab") {
+      // Lenses are cut in the lab – every Rx line must have a verified prescription by now.
+      const notReady = order.items.map((i) => ({ item: i, rx: lineRx(i) })).filter(({ rx }) => !isLabReady(rx.state));
+      if (notReady.length) {
+        throw new BadRequestError(
+          "Every prescription item must have a verified prescription before the order can go to the lab",
+          notReady.map(({ item, rx }) => ({ itemId: item.id, name: { ar: item.nameAr, en: item.nameEn }, state: rx.state, appointmentId: item.appointmentId })),
+        );
+      }
     }
     await db.transaction(async (tx) => {
       await ordersRepository.update(

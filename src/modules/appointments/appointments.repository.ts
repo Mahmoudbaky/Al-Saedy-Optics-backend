@@ -8,7 +8,11 @@ export type NewDoctor = typeof doctors.$inferInsert;
 export type AppointmentRow = typeof appointments.$inferSelect;
 export type NewAppointment = typeof appointments.$inferInsert;
 
-const withDoctor = { doctor: true, user: { columns: { id: true, name: true, email: true, phone: true, locale: true } } } as const;
+const withDoctor = {
+  doctor: true,
+  prescription: true,
+  user: { columns: { id: true, name: true, email: true, phone: true, locale: true } },
+} as const;
 export type AppointmentWithDoctor = NonNullable<Awaited<ReturnType<typeof appointmentsRepository.findById>>>;
 
 const LIVE = ["booked", "confirmed"] as const;

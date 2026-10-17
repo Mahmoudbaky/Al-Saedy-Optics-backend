@@ -10,6 +10,7 @@ import { pageMeta } from "../../lib/pagination.js";
 import { addDays, hmIn, isoWeekday, ymdIn, zonedTimeToUtc } from "../../lib/time.js";
 import { notificationsService } from "../notifications/notifications.service.js";
 import { appointmentsRepository, type AppointmentWithDoctor, type DoctorRow } from "./appointments.repository.js";
+import { prescriptionsService } from "../prescriptions/prescriptions.service.js";
 import type {
   AdminListAppointmentsQuery,
   AppointmentDto,
@@ -17,6 +18,7 @@ import type {
   BookAppointmentInput,
   CreateDoctorInput,
   DoctorDto,
+  RecordExamPrescriptionInput,
   UpdateDoctorInput,
 } from "./appointments.schema.js";
 
@@ -38,6 +40,7 @@ const canCancel = (a: { status: AppointmentStatus; scheduledAt: Date }) =>
 
 export const toAppointmentDto = (a: AppointmentWithDoctor): AppointmentDto => ({
   id: a.id,
+  prescriptionId: a.prescription?.id ?? null,
   doctor: { id: a.doctor.id, name: localized(a.doctor, "name")!, specialty: localized(a.doctor, "specialty"), imageUrl: a.doctor.imageUrl },
   scheduledAt: a.scheduledAt.toISOString(),
   reason: a.reason,
@@ -165,6 +168,31 @@ export const appointmentsService = {
       items: rows.map((r) => ({ ...toAppointmentDto(r), user: { id: r.user.id, name: r.user.name, email: r.user.email, phone: r.user.phone } })),
       meta: pageMeta(total, query),
     };
+  },
+
+  /**
+   * Records the exam result: creates a verified clinic prescription for the
+   * customer and links it to every cart / order line waiting on this appointment.
+   */
+  async recordPrescription(id: string, input: RecordExamPrescriptionInput, actorId: string) {
+    const appt = await appointmentsRepository.findById(id);
+    if (!appt) throw new NotFoundError("Appointment", id);
+    if (appt.prescription) throw new ConflictError("A prescription was already recorded for this appointment");
+    if (appt.status === "cancelled" || appt.status === "noShow") throw new BadRequestError(`Cannot record a prescription for a ${appt.status} appointment`);
+
+    const rx = await prescriptionsService.createFromExam(appt, input, actorId);
+    await appointmentsRepository.update(id, { status: "completed", ...(input.notes !== undefined ? { notes: input.notes } : {}) });
+    log.info({ appointmentId: id, prescriptionId: rx.id, actorId }, "Exam prescription recorded");
+    void notificationsService.notify(
+      appt.userId,
+      {
+        title: { ar: "وصفتك جاهزة", en: "Your prescription is ready" },
+        body: { ar: `سجّل ${appt.doctor.nameAr} وصفتك بعد الفحص`, en: `${appt.doctor.nameEn} recorded your prescription after the exam` },
+        link: `/prescriptions`,
+      },
+      appt.user.locale,
+    );
+    return { appointment: toAppointmentDto((await appointmentsRepository.findById(id))!), prescription: rx };
   },
 
   async updateStatus(id: string, status: AppointmentStatus, notes?: string) {

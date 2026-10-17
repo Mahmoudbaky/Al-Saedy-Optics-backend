@@ -3,6 +3,7 @@ import { APPOINTMENT_REASONS, APPOINTMENT_STATUSES } from "../../db/schema/enums
 import { localizedStringSchema, optionalLocalizedStringSchema } from "../../lib/i18n.js";
 import { paginationQuerySchema } from "../../lib/pagination.js";
 import { urlSchema, uuidSchema } from "../../lib/schemas.js";
+import { eyeValuesSchema } from "../prescriptions/prescriptions.schema.js";
 
 export const availabilityQuerySchema = z.object({
   doctorId: uuidSchema.optional(),
@@ -55,6 +56,8 @@ export const updateDoctorSchema = createDoctorSchema.partial();
 
 export const appointmentResponseSchema = z.object({
   id: z.uuid(),
+  /** Prescription recorded at this exam by the clinic, once available. */
+  prescriptionId: z.uuid().nullable(),
   doctor: doctorResponseSchema.pick({ id: true, name: true, specialty: true, imageUrl: true }),
   scheduledAt: z.string(),
   reason: z.enum(APPOINTMENT_REASONS),
@@ -77,6 +80,22 @@ export const availabilityResponseSchema = z.object({
     }),
   ),
 });
+
+/**
+ * Values the optometrist enters after the exam. Creates a `verified` prescription
+ * (source = "clinic") linked to the appointment and to every cart / order line
+ * that was waiting on it.
+ */
+export const recordExamPrescriptionSchema = z.object({
+  od: eyeValuesSchema,
+  os: eyeValuesSchema,
+  pd: z.string().trim().max(12).nullable().optional(),
+  add: z.string().trim().max(8).nullable().optional(),
+  label: z.string().trim().max(100).nullable().optional(),
+  expiresOn: z.iso.date().nullable().optional(),
+  notes: z.string().trim().max(500).nullable().optional(),
+});
+export type RecordExamPrescriptionInput = z.infer<typeof recordExamPrescriptionSchema>;
 
 export type AvailabilityQuery = z.infer<typeof availabilityQuerySchema>;
 export type BookAppointmentInput = z.infer<typeof bookAppointmentSchema>;

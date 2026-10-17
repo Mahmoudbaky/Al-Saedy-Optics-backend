@@ -80,6 +80,8 @@ export const prescriptionResponseSchema = z.object({
   add: z.string().nullable(),
   imageUrl: z.string().nullable(),
   reviewNote: z.string().nullable(),
+  /** Set when the prescription came from an in-clinic eye exam. */
+  appointmentId: z.uuid().nullable(),
   createdAt: z.string(),
 });
 

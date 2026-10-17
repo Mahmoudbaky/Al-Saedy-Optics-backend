@@ -1,9 +1,16 @@
 import { env } from "../../config/env.js";
 import { formatAddress } from "../addresses/addresses.service.js";
 import { CUSTOMER_CANCELLABLE, ORDER_TRANSITIONS, timelineFor } from "./orders.status.js";
-import type { PrescriptionStatus } from "../../db/schema/enums.js";
+import { appointmentSummary } from "../cart/cart.service.js";
+import { resolveLineRx, worstRxState } from "../prescriptions/rx-line.js";
 import type { OrderWithRelations } from "./orders.repository.js";
 import type { AdminOrderDto, OrderDto } from "./orders.schema.js";
+
+type OrderLine = OrderWithRelations["items"][number];
+
+/** Live prescription state of a line – `prescription` / `appointment` are the current rows, not the snapshot. */
+export const lineRx = (i: OrderLine) =>
+  resolveLineRx({ required: i.requiresPrescription, prescription: i.prescription, appointment: i.appointment });
 
 export function toOrderDto(o: OrderWithRelations): OrderDto {
   const steps = timelineFor(o.deliveryMethod);
@@ -36,7 +43,7 @@ export function toOrderDto(o: OrderWithRelations): OrderDto {
           formatted: formatAddress(o.address),
         }
       : null,
-    prescription: o.prescription ?? null,
+    prescriptionStatus: worstRxState(o.items.map((i) => lineRx(i).state)),
     items: o.items.map((i) => ({
       id: i.id,
       productId: i.productId,
@@ -50,6 +57,14 @@ export function toOrderDto(o: OrderWithRelations): OrderDto {
       unitPrice: i.unitPrice,
       quantity: i.quantity,
       lineTotal: i.lineTotal,
+      prescription: {
+        required: i.requiresPrescription,
+        mode: lineRx(i).mode,
+        state: lineRx(i).state,
+        prescriptionId: i.prescriptionId,
+        snapshot: i.prescriptionSnapshot ?? null,
+        appointment: appointmentSummary(i.appointment),
+      },
     })),
     itemCount: o.items.reduce((s, i) => s + i.quantity, 0),
     subtotal: o.subtotal,
@@ -69,11 +84,10 @@ export function toOrderDto(o: OrderWithRelations): OrderDto {
   };
 }
 
-export function toAdminOrderDto(o: OrderWithRelations, rxStatus: Map<string, PrescriptionStatus> = new Map()): AdminOrderDto {
+export function toAdminOrderDto(o: OrderWithRelations): AdminOrderDto {
   return {
     ...toOrderDto(o),
     adminNote: o.adminNote,
-    prescriptionStatus: o.prescription ? (rxStatus.get(o.prescription.id) ?? null) : null,
     nextStatuses: [...ORDER_TRANSITIONS[o.status]],
     user: { id: o.user.id, name: o.user.name, email: o.user.email, phone: o.user.phone },
     events: o.events.map((e) => ({ status: e.status, at: e.createdAt.toISOString(), note: e.note, actorId: e.actorId })),

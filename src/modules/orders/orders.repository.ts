@@ -10,7 +10,7 @@ export type NewOrder = typeof orders.$inferInsert;
 export type NewOrderItem = typeof orderItems.$inferInsert;
 
 const orderWith = {
-  items: { orderBy: [asc(orderItems.id)] },
+  items: { orderBy: [asc(orderItems.id)], with: { prescription: true, appointment: { with: { doctor: true } } } },
   events: { orderBy: [asc(orderEvents.createdAt)] },
   user: { columns: { id: true, name: true, email: true, phone: true, locale: true } },
 } satisfies NonNullable<Parameters<typeof db.query.orders.findFirst>[0]>["with"];

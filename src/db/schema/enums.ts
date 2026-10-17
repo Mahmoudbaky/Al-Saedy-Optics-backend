@@ -38,6 +38,7 @@ export const appointmentReasonEnum = pgEnum("appointment_reason", APPOINTMENT_RE
 
 export const APPOINTMENT_STATUSES = ["booked", "confirmed", "completed", "cancelled", "noShow"] as const;
 export const appointmentStatusEnum = pgEnum("appointment_status", APPOINTMENT_STATUSES);
+export type AppointmentStatus = (typeof APPOINTMENT_STATUSES)[number];
 
 export const PROMO_TYPES = ["percent", "fixed"] as const;
 export const promoTypeEnum = pgEnum("promo_type", PROMO_TYPES);

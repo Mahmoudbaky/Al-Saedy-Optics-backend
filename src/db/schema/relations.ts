@@ -66,6 +66,7 @@ export const addressRelations = relations(addresses, ({ one }) => ({
 
 export const prescriptionRelations = relations(prescriptions, ({ one }) => ({
   user: one(user, { fields: [prescriptions.userId], references: [user.id] }),
+  appointment: one(appointments, { fields: [prescriptions.appointmentId], references: [appointments.id] }),
 }));
 
 export const wishlistRelations = relations(wishlistItems, ({ one }) => ({
@@ -80,7 +81,6 @@ export const reviewRelations = relations(reviews, ({ one }) => ({
 
 export const cartRelations = relations(carts, ({ one, many }) => ({
   user: one(user, { fields: [carts.userId], references: [user.id] }),
-  prescription: one(prescriptions, { fields: [carts.prescriptionId], references: [prescriptions.id] }),
   items: many(cartItems),
 }));
 
@@ -88,6 +88,8 @@ export const cartItemRelations = relations(cartItems, ({ one }) => ({
   cart: one(carts, { fields: [cartItems.cartId], references: [carts.id] }),
   product: one(products, { fields: [cartItems.productId], references: [products.id] }),
   variant: one(productVariants, { fields: [cartItems.variantId], references: [productVariants.id] }),
+  prescription: one(prescriptions, { fields: [cartItems.prescriptionId], references: [prescriptions.id] }),
+  appointment: one(appointments, { fields: [cartItems.appointmentId], references: [appointments.id] }),
 }));
 
 export const orderRelations = relations(orders, ({ one, many }) => ({
@@ -99,6 +101,8 @@ export const orderRelations = relations(orders, ({ one, many }) => ({
 export const orderItemRelations = relations(orderItems, ({ one }) => ({
   order: one(orders, { fields: [orderItems.orderId], references: [orders.id] }),
   product: one(products, { fields: [orderItems.productId], references: [products.id] }),
+  prescription: one(prescriptions, { fields: [orderItems.prescriptionId], references: [prescriptions.id] }),
+  appointment: one(appointments, { fields: [orderItems.appointmentId], references: [appointments.id] }),
 }));
 
 export const orderEventRelations = relations(orderEvents, ({ one }) => ({
@@ -113,6 +117,8 @@ export const doctorRelations = relations(doctors, ({ many }) => ({
 export const appointmentRelations = relations(appointments, ({ one }) => ({
   user: one(user, { fields: [appointments.userId], references: [user.id] }),
   doctor: one(doctors, { fields: [appointments.doctorId], references: [doctors.id] }),
+  /** The prescription recorded at this exam, once the clinic enters it. */
+  prescription: one(prescriptions, { fields: [appointments.id], references: [prescriptions.appointmentId] }),
 }));
 
 export const deviceTokenRelations = relations(deviceTokens, ({ one }) => ({

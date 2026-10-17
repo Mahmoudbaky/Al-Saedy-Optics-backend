@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { db, type DbExecutor } from "../../db/index.js";
 import { cartItems, carts, productImages, productVariants } from "../../db/schema/index.js";
 
@@ -6,11 +6,12 @@ export type CartRow = typeof carts.$inferSelect;
 export type NewCartItem = typeof cartItems.$inferInsert;
 
 const cartWith = {
-  prescription: true,
   items: {
     orderBy: [asc(cartItems.createdAt)],
     with: {
       variant: true,
+      prescription: true,
+      appointment: { with: { doctor: true } },
       product: {
         with: {
           category: true,
@@ -39,13 +40,21 @@ export const cartRepository = {
 
   update: (cartId: string, data: Partial<CartRow>, ex: DbExecutor = db) => ex.update(carts).set(data).where(eq(carts.id, cartId)),
 
+  /** Sets the prescription source of one line (either id, both null to clear). */
+  setItemRx: (itemId: string, rx: { prescriptionId: string | null; appointmentId: string | null }, ex: DbExecutor = db) =>
+    ex.update(cartItems).set(rx).where(eq(cartItems.id, itemId)),
+
+  /** Links the prescription recorded for an exam to every cart line waiting on it. */
+  fulfilAppointment: (appointmentId: string, prescriptionId: string, ex: DbExecutor = db) =>
+    ex.update(cartItems).set({ prescriptionId }).where(and(eq(cartItems.appointmentId, appointmentId), isNull(cartItems.prescriptionId))),
+
   /** Inserts a line or bumps the quantity of an identical one (same variant + add-ons + label). */
   async upsertItem(item: NewCartItem, ex: DbExecutor = db) {
     const [row] = await ex
       .insert(cartItems)
       .values(item)
       .onConflictDoUpdate({
-        target: [cartItems.cartId, cartItems.variantId, cartItems.addonIds, cartItems.variantLabel],
+        target: [cartItems.cartId, cartItems.variantId, cartItems.addonIds, cartItems.variantLabel, cartItems.prescriptionId, cartItems.appointmentId],
         set: { quantity: sql`${cartItems.quantity} + ${item.quantity ?? 1}` },
       })
       .returning();
@@ -61,8 +70,5 @@ export const cartRepository = {
   deleteItem: (itemId: string, ex: DbExecutor = db) => ex.delete(cartItems).where(eq(cartItems.id, itemId)),
 
   clear: (cartId: string, ex: DbExecutor = db) =>
-    Promise.all([
-      ex.delete(cartItems).where(eq(cartItems.cartId, cartId)),
-      ex.update(carts).set({ promoCode: null, prescriptionId: null }).where(eq(carts.id, cartId)),
-    ]),
+    Promise.all([ex.delete(cartItems).where(eq(cartItems.cartId, cartId)), ex.update(carts).set({ promoCode: null }).where(eq(carts.id, cartId))]),
 };

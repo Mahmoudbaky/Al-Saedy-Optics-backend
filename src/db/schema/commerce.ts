@@ -1,7 +1,8 @@
-import { boolean, index, integer, jsonb, pgTable, serial, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, serial, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { timestamps, uuidPk } from "./_shared.js";
 import { user } from "./auth.js";
 import { products, productVariants } from "./catalog.js";
+import { appointments } from "./clinic.js";
 import { prescriptions } from "./customer.js";
 import { deliveryMethodEnum, orderStatusEnum, paymentMethodEnum, paymentStatusEnum, promoTypeEnum } from "./enums.js";
 
@@ -12,7 +13,6 @@ export const carts = pgTable("carts", {
     .notNull()
     .unique()
     .references(() => user.id, { onDelete: "cascade" }),
-  prescriptionId: uuid("prescription_id").references(() => prescriptions.id, { onDelete: "set null" }),
   promoCode: text("promo_code"),
   ...timestamps,
 });
@@ -35,12 +35,21 @@ export const cartItems = pgTable(
     addonIds: text("addon_ids").array().notNull().default([]),
     /** Free-text variant info, e.g. contact lens power "-1.00". Empty string when none. */
     variantLabel: text("variant_label").notNull().default(""),
+    /**
+     * Prescription source for this line (products with `requiresPrescription`):
+     * either an existing prescription, or an eye-exam appointment whose result
+     * will become the prescription. At most one of the two is set by the customer;
+     * when the clinic records the exam, `prescriptionId` is filled in as well.
+     */
+    prescriptionId: uuid("prescription_id").references(() => prescriptions.id, { onDelete: "set null" }),
+    appointmentId: uuid("appointment_id").references(() => appointments.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (t) => [
     index("cart_items_cart_idx").on(t.cartId),
-    // Same product + colour + add-ons merges into one line.
-    uniqueIndex("cart_items_line_uq").on(t.cartId, t.variantId, t.addonIds, t.variantLabel),
+    // Same product + colour + add-ons + prescription source merges into one line.
+    // NULLS NOT DISTINCT so lines without a prescription still merge.
+    unique("cart_items_line_uq").on(t.cartId, t.variantId, t.addonIds, t.variantLabel, t.prescriptionId, t.appointmentId).nullsNotDistinct(),
   ],
 );
 
@@ -93,7 +102,6 @@ export const orders = pgTable(
     paymentStatus: paymentStatusEnum("payment_status").notNull().default("unpaid"),
     /** Copied at checkout so later address edits don't rewrite history. */
     address: jsonb("address").$type<AddressSnapshot>(),
-    prescription: jsonb("prescription").$type<PrescriptionSnapshot>(),
     subtotal: integer("subtotal").notNull(),
     discount: integer("discount").notNull().default(0),
     deliveryFee: integer("delivery_fee").notNull().default(0),
@@ -137,8 +145,22 @@ export const orderItems = pgTable(
     unitPrice: integer("unit_price").notNull(),
     quantity: integer("quantity").notNull(),
     lineTotal: integer("line_total").notNull(),
+    /** Whether this line needs a prescription before it can go to the lab. */
+    requiresPrescription: boolean("requires_prescription").notNull().default(false),
+    /** Live links – the prescription may still be pending review, or arrive later from the exam. */
+    prescriptionId: uuid("prescription_id").references(() => prescriptions.id, { onDelete: "set null" }),
+    appointmentId: uuid("appointment_id").references(() => appointments.id, { onDelete: "set null" }),
+    /**
+     * Frozen copy of the values used to cut the lenses (set at checkout or when the exam is recorded).
+     * TS key differs from the column so it doesn't clash with the `prescription` relation.
+     */
+    prescriptionSnapshot: jsonb("prescription").$type<PrescriptionSnapshot>(),
   },
-  (t) => [index("order_items_order_idx").on(t.orderId)],
+  (t) => [
+    index("order_items_order_idx").on(t.orderId),
+    index("order_items_prescription_idx").on(t.prescriptionId),
+    index("order_items_appointment_idx").on(t.appointmentId),
+  ],
 );
 
 /** Status timeline shown on the tracking screen. */

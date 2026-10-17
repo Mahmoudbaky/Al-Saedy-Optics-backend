@@ -107,9 +107,9 @@ into the JSON envelope.
 | Catalogue | `GET /categories`, `/brands`, `/lens-addons`, `/banners`, `/products`, `/products/:idOrSlug`, `/products/:id/reviews` | `PUT /products/:id/reviews/mine` | full CRUD on categories, brands, lens-addons, banners, products (+ variants, images, stock, bulk), reviews moderation |
 | Account | | `GET/PATCH /me`, addresses, devices (push tokens), notifications | users list / role / ban |
 | Prescriptions | | CRUD `/me/prescriptions` | list pending, `POST /prescriptions/:id/review` |
-| Cart | | `/me/cart` items / promo / prescription | promo codes CRUD |
+| Cart | | `/me/cart` items / promo · per-line `items/:id/prescription` & `items/:id/appointment` | promo codes CRUD |
 | Orders | | `POST /me/orders/checkout`, list, detail, cancel | list, detail, `POST /:id/status`, courier / ETA / payment |
-| Clinic | `GET /clinic/doctors`, `/clinic/availability` | book / reschedule / cancel `/me/appointments` | schedule, status, doctors CRUD |
+| Clinic | `GET /clinic/doctors`, `/clinic/availability` | book / reschedule / cancel `/me/appointments` | schedule, status, `POST /appointments/:id/prescription` (record exam), doctors CRUD |
 
 Open `/docs` for every endpoint with request/response schemas.
 
@@ -125,10 +125,31 @@ Cash-on-delivery orders start at `confirmed`; card / wallet start at `pending` u
 confirm payment (no PSP integration yet). Cancelling releases stock and promo usage.
 Every transition writes an `order_events` row (the tracking timeline) and a push/in-app notification.
 
+### Prescriptions are per line
+
+Every cart line (and later order line) of a product with `requiresPrescription` carries its own
+prescription source. The customer picks one of two options per item:
+
+| Option | Endpoint | Line state |
+|---|---|---|
+| 1 · use a saved prescription | `PUT /me/cart/items/:itemId/prescription` `{ prescriptionId }` | `pending` → `verified` (staff review) |
+| 2 · get it from an eye exam | `PUT /me/cart/items/:itemId/appointment` `{ appointmentId }` **or** `{ scheduledAt, doctorId?, … }` (books a slot) | `awaitingExam` → `verified` when the clinic records the exam |
+
+Both ids can also be passed straight to `POST /me/cart/items`. `DELETE …/items/:itemId/prescription` clears the source.
+Each line exposes `prescription: { required, mode, state, ready, issue, prescription, appointment }`; the cart exposes
+`prescriptionsReady`. Line states: `notRequired · missing · pending · verified · awaitingExam · examCancelled · rejected · expired`.
+
+After the visit, staff call `POST /admin/appointments/:id/prescription` with the measured values. That creates a
+`verified` prescription (`source: "clinic"`, `appointmentId` set), marks the appointment `completed`, and links it to
+every cart line and order line that was waiting on that appointment (order lines also get a frozen `snapshot`).
+
 ### Checkout rules
 
 - Totals are recomputed server-side from live prices; the client never sends amounts.
-- Items with `requiresPrescription` need a **verified** prescription attached (cart or body).
+- Every Rx line must be `ready`: a saved prescription (pending or verified) or a live/completed exam appointment.
+  `missing`, `rejected`, `expired` and `examCancelled` lines block checkout with per-item details.
+- Orders expose `prescriptionStatus` = the most blocking line state (null when nothing needs an Rx).
+  An order can only move to **`lab`** once every Rx line is `verified`.
 - Home delivery needs an address (defaults to the customer's default address). Fee = `DELIVERY_FEE`, free above `FREE_DELIVERY_THRESHOLD`; pickup is free.
 - Stock is decremented per colour variant inside the transaction.
 

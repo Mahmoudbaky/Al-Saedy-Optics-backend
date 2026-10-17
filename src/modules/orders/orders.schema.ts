@@ -1,18 +1,16 @@
 import { z } from "zod";
-import { DELIVERY_METHODS, ORDER_STATUSES,
-  PRESCRIPTION_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES } from "../../db/schema/enums.js";
+import { DELIVERY_METHODS, ORDER_STATUSES, PAYMENT_METHODS, PAYMENT_STATUSES } from "../../db/schema/enums.js";
 import { localizedStringSchema } from "../../lib/i18n.js";
 import { paginationQuerySchema } from "../../lib/pagination.js";
 import { phoneSchema, uuidSchema } from "../../lib/schemas.js";
 import { addressResponseSchema } from "../addresses/addresses.schema.js";
+import { appointmentSummarySchema, lineRxModeSchema, lineRxStateSchema } from "../prescriptions/rx-line.js";
 
 export const checkoutSchema = z.object({
   deliveryMethod: z.enum(DELIVERY_METHODS),
   paymentMethod: z.enum(PAYMENT_METHODS),
   /** Required for home delivery; defaults to the user's default address. */
   addressId: uuidSchema.optional(),
-  /** Overrides the prescription attached to the cart. */
-  prescriptionId: uuidSchema.optional(),
   note: z.string().trim().max(500).optional(),
 });
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
@@ -56,6 +54,14 @@ export const updateOrderDetailsSchema = z
 
 export const cancelOrderSchema = z.object({ reason: z.string().trim().max(300).optional() });
 
+const prescriptionSnapshotSchema = z.object({
+  id: z.string(),
+  od: z.object({ sph: z.string().nullable(), cyl: z.string().nullable(), axis: z.string().nullable() }),
+  os: z.object({ sph: z.string().nullable(), cyl: z.string().nullable(), axis: z.string().nullable() }),
+  pd: z.string().nullable(),
+  add: z.string().nullable(),
+});
+
 const orderItemSchema = z.object({
   id: z.uuid(),
   productId: z.uuid().nullable(),
@@ -69,6 +75,15 @@ const orderItemSchema = z.object({
   unitPrice: z.number(),
   quantity: z.number(),
   lineTotal: z.number(),
+  /** Per-line prescription: source, live state and the frozen values used for the lenses. */
+  prescription: z.object({
+    required: z.boolean(),
+    mode: lineRxModeSchema,
+    state: lineRxStateSchema,
+    prescriptionId: z.uuid().nullable(),
+    snapshot: prescriptionSnapshotSchema.nullable(),
+    appointment: appointmentSummarySchema.nullable(),
+  }),
 });
 
 export const orderResponseSchema = z.object({
@@ -79,15 +94,11 @@ export const orderResponseSchema = z.object({
   paymentMethod: z.enum(PAYMENT_METHODS),
   paymentStatus: z.enum(PAYMENT_STATUSES),
   address: addressResponseSchema.omit({ id: true, label: true, isDefault: true }).nullable(),
-  prescription: z
-    .object({
-      id: z.string(),
-      od: z.object({ sph: z.string().nullable(), cyl: z.string().nullable(), axis: z.string().nullable() }),
-      os: z.object({ sph: z.string().nullable(), cyl: z.string().nullable(), axis: z.string().nullable() }),
-      pd: z.string().nullable(),
-      add: z.string().nullable(),
-    })
-    .nullable(),
+  /**
+   * Most blocking prescription state across the lines (null when nothing needs one).
+   * The order can only move to `lab` once this is `verified`.
+   */
+  prescriptionStatus: lineRxStateSchema.nullable(),
   items: z.array(orderItemSchema),
   itemCount: z.number(),
   subtotal: z.number(),
@@ -110,8 +121,6 @@ export type OrderDto = z.infer<typeof orderResponseSchema>;
 
 export const adminOrderResponseSchema = orderResponseSchema.extend({
   adminNote: z.string().nullable(),
-  /** Live status of the attached prescription (the snapshot above is frozen at checkout). */
-  prescriptionStatus: z.enum(PRESCRIPTION_STATUSES).nullable(),
   /** Transitions allowed from the current status – drives the admin action buttons. */
   nextStatuses: z.array(z.enum(ORDER_STATUSES)),
   user: z.object({ id: z.uuid(), name: z.string(), email: z.string(), phone: z.string().nullable() }),

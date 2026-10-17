@@ -2,6 +2,7 @@ import { boolean, date, index, pgTable, smallint, text, timestamp, uniqueIndex, 
 import { timestamps, uuidPk } from "./_shared.js";
 import { user } from "./auth.js";
 import { products } from "./catalog.js";
+import { appointments } from "./clinic.js";
 import { devicePlatformEnum, prescriptionSourceEnum, prescriptionStatusEnum } from "./enums.js";
 
 export const addresses = pgTable(
@@ -62,6 +63,10 @@ export const prescriptions = pgTable(
     imageUrl: text("image_url"),
     /** Admin note when verifying / rejecting */
     reviewNote: text("review_note"),
+    /** Set when the prescription is the result of an in-clinic eye exam (source = "clinic"). */
+    appointmentId: uuid("appointment_id")
+      .unique()
+      .references(() => appointments.id, { onDelete: "set null" }),
     ...timestamps,
   },
   (t) => [index("prescriptions_user_idx").on(t.userId)],

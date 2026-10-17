@@ -11,11 +11,13 @@ import {
   bookAppointmentSchema,
   createDoctorSchema,
   doctorResponseSchema,
+  recordExamPrescriptionSchema,
   rescheduleSchema,
   updateAppointmentStatusSchema,
   updateDoctorSchema,
 } from "./appointments.schema.js";
 import { appointmentsService } from "./appointments.service.js";
+import { prescriptionResponseSchema } from "../prescriptions/prescriptions.schema.js";
 
 // ---- public ------------------------------------------------------------------
 const pub = createModuleRouter({ prefix: "/api/v1/clinic", tags: ["Clinic · Eye exams"] });
@@ -99,6 +101,20 @@ admin.route({
   response: appointmentResponseSchema,
   status: 200,
   handler: ({ params, body }) => appointmentsService.updateStatus(params.id, body.status, body.notes),
+});
+
+admin.route({
+  method: "post",
+  path: "/:id/prescription",
+  summary: "Record the exam result as a verified prescription",
+  description:
+    "Creates a `verified` prescription (source `clinic`) for the customer, marks the appointment `completed`, " +
+    "and links the prescription to every cart line and order line that chose this appointment as its prescription source.",
+  params: idParamSchema,
+  body: recordExamPrescriptionSchema,
+  response: z.object({ appointment: appointmentResponseSchema, prescription: prescriptionResponseSchema }),
+  status: 201,
+  handler: async ({ params, body, user }) => created(await appointmentsService.recordPrescription(params.id, body, user.id)),
 });
 
 const adminDoctors = createModuleRouter({ prefix: "/api/v1/admin/doctors", tags: ["Admin · Doctors"], auth: "admin" });

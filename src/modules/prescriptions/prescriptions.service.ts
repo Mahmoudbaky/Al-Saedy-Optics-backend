@@ -1,9 +1,12 @@
 import { eq } from "drizzle-orm";
 import { createLogger } from "../../config/logger.js";
+import { db } from "../../db/index.js";
 import { prescriptions } from "../../db/schema/index.js";
 import { BadRequestError, NotFoundError } from "../../lib/errors.js";
 import { pageMeta } from "../../lib/pagination.js";
+import { cartRepository } from "../cart/cart.repository.js";
 import { prescriptionsRepository, type NewPrescription, type PrescriptionRow } from "./prescriptions.repository.js";
+import { snapshotOf } from "./rx-line.js";
 import type {
   AdminListPrescriptionsQuery,
   CreatePrescriptionInput,
@@ -32,6 +35,7 @@ export const toPrescriptionDto = (row: PrescriptionRow): PrescriptionDto => ({
   add: row.addPower,
   imageUrl: row.imageUrl,
   reviewNote: row.reviewNote,
+  appointmentId: row.appointmentId,
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -112,6 +116,41 @@ export const prescriptionsService = {
   async delete(userId: string, id: string) {
     await this.getOwned(userId, id);
     await prescriptionsRepository.delete(id);
+  },
+
+  /**
+   * Prescription produced by an in-clinic exam. It is verified on creation (the
+   * optometrist entered it) and immediately fulfils every cart line and open
+   * order line that picked this appointment as its prescription source.
+   */
+  async createFromExam(
+    appt: { id: string; userId: string; doctor: { nameEn: string } },
+    input: { od: { sph?: string | null; cyl?: string | null; axis?: string | null }; os: { sph?: string | null; cyl?: string | null; axis?: string | null }; pd?: string | null; add?: string | null; label?: string | null; expiresOn?: string | null },
+    actorId: string,
+  ) {
+    const today = new Date().toISOString().slice(0, 10);
+    const row = await db.transaction(async (tx) => {
+      const rx = await prescriptionsRepository.create(
+        {
+          userId: appt.userId,
+          appointmentId: appt.id,
+          label: input.label ?? null,
+          doctorName: appt.doctor.nameEn,
+          issuedOn: today,
+          expiresOn: input.expiresOn ?? defaultExpiry(today),
+          source: "clinic",
+          status: "verified",
+          reviewNote: `Recorded at the clinic by ${actorId}`,
+          ...eyeColumns(input),
+        },
+        tx,
+      );
+      await cartRepository.fulfilAppointment(appt.id, rx.id, tx);
+      await prescriptionsRepository.fulfilOrderLines(appt.id, rx.id, snapshotOf(rx), tx);
+      return rx;
+    });
+    log.info({ id: row.id, userId: appt.userId, appointmentId: appt.id }, "Clinic prescription recorded");
+    return toPrescriptionDto(row);
   },
 
   // ---- admin ---------------------------------------------------------------
